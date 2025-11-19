@@ -9,9 +9,10 @@ and reproducibility.
 
 import csv
 import itertools
+import json
 from dataclasses import dataclass
 import os
-from typing import Tuple, List, Optional
+from typing import Tuple, List, Optional, Dict, Any
 from pathlib import Path
 import random
 import numpy as np
@@ -22,7 +23,27 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms, models
 from tqdm.auto import tqdm
-from sklearn.metrics import confusion_matrix
+from sklearn.metrics import confusion_matrix, classification_report
+
+
+# ----------------------------
+# Paths & configuration (mirrors hyperbolic script)
+# ----------------------------
+DATA_ROOT = "/data3/datasets/WBC_Our_dataset"
+SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT"
+PERSIST_SPLITS_DIR = "splits"
+
+TRAIN_FRAC = 0.7
+VAL_FRAC = 0.15
+TEST_FRAC = 0.15
+SPLIT_SEED = 42
+IMG_SIZE_DEFAULT = 224
+
+THRESHOLD: Optional[int] = 110
+BALANCE_TO_MIN: bool = False
+BALANCE_CAP: Optional[int] = None
+
+ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 
 # ----------------------------
@@ -148,6 +169,132 @@ def f1_macro_from_preds_labels(
 
 
 # ----------------------------
+# Plotting helpers (shared with hyperbolic script)
+# ----------------------------
+def save_confusion_matrix_figure(
+    cm: np.ndarray, classes: List[str], out_path: str, normalize: bool = False
+):
+    import matplotlib.pyplot as plt
+
+    cm_plot = cm.astype(float)
+    if normalize:
+        with np.errstate(all="ignore"):
+            row_sums = cm_plot.sum(axis=1, keepdims=True)
+            cm_plot = np.divide(cm_plot, np.maximum(row_sums, 1e-12))
+
+    fig, ax = plt.subplots(figsize=(10, 10))
+    im = ax.imshow(cm_plot, interpolation="nearest")
+    ax.figure.colorbar(im, ax=ax)
+
+    ax.set(
+        xticks=np.arange(cm_plot.shape[1]),
+        yticks=np.arange(cm_plot.shape[0]),
+        xticklabels=classes,
+        yticklabels=classes,
+        ylabel="True label",
+        xlabel="Predicted label",
+        title="Confusion Matrix" + (" (Normalized)" if normalize else ""),
+    )
+
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    for i in range(cm_plot.shape[0]):
+        for j in range(cm_plot.shape[1]):
+            val = cm_plot[i, j]
+            txt = f"{val:.2f}" if normalize else f"{int(val)}"
+            ax.text(j, i, txt, ha="center", va="center")
+
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+
+def save_classification_report_csv_and_image(
+    report_dict: Dict[str, Any], classes: List[str], csv_path: str, img_path: str
+):
+    import csv as _csv
+    import matplotlib.pyplot as plt
+
+    headers = ["class", "precision", "recall", "f1", "support"]
+    rows = []
+
+    for i, cls in enumerate(classes):
+        if str(i) in report_dict:
+            stats = report_dict[str(i)]
+        elif cls in report_dict:
+            stats = report_dict[cls]
+        else:
+            stats = {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0}
+        rows.append(
+            [
+                cls,
+                float(stats.get("precision", 0.0)),
+                float(stats.get("recall", 0.0)),
+                float(stats.get("f1-score", 0.0)),
+                int(stats.get("support", 0)),
+            ]
+        )
+
+    acc = float(report_dict.get("accuracy", 0.0))
+    macro = report_dict.get(
+        "macro avg", {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0}
+    )
+    wavg = report_dict.get(
+        "weighted avg",
+        {"precision": 0.0, "recall": 0.0, "f1-score": 0.0, "support": 0},
+    )
+    rows.append(["accuracy", acc, acc, acc, int(wavg.get("support", 0))])
+    rows.append(
+        [
+            "macro avg",
+            float(macro.get("precision", 0.0)),
+            float(macro.get("recall", 0.0)),
+            float(macro.get("f1-score", 0.0)),
+            int(macro.get("support", 0)),
+        ]
+    )
+    rows.append(
+        [
+            "weighted avg",
+            float(wavg.get("precision", 0.0)),
+            float(wavg.get("recall", 0.0)),
+            float(wavg.get("f1-score", 0.0)),
+            int(wavg.get("support", 0)),
+        ]
+    )
+
+    with open(csv_path, "w", newline="") as f:
+        writer = _csv.writer(f)
+        writer.writerow(headers)
+        for r in rows:
+            writer.writerow(r)
+
+    fig, ax = plt.subplots(figsize=(10, 0.5 + 0.35 * (len(rows) + 1)))
+    ax.axis("off")
+    table = ax.table(
+        cellText=[
+            [
+                f"{c}"
+                if i == 0 or isinstance(c, str)
+                else f"{c:.4f}"
+                if j in [1, 2, 3]
+                else f"{c}"
+                for j, c in enumerate(r)
+            ]
+            for i, r in enumerate(rows)
+        ],
+        colLabels=headers,
+        loc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(8)
+    table.scale(1, 1.2)
+    ax.set_title("Classification Report")
+    fig.tight_layout()
+    fig.savefig(img_path, dpi=200, bbox_inches="tight")
+    plt.close(fig)
+
+# ----------------------------
 # Model components
 # ----------------------------
 class ClassificationHead(nn.Module):
@@ -233,173 +380,187 @@ class CNNClassifier(nn.Module):
 
 
 # ----------------------------
-# Data loading
+# Data (uses pre-generated JSON splits, identical to hyperbolic script)
 # ----------------------------
-def build_dataloaders(
+def _is_valid_file(path: str) -> bool:
+    return Path(path).suffix.lower() in ALLOWED_EXTS
+
+
+def _resolve_split_dir(
     root: str,
-    img_size: int = 224,
+    split_output_dir: str,
+    persist_splits_dir: str,
+    seed: int,
+    train_frac: float,
+    val_frac: float,
+    img_size: int,
+    balance_to_min: bool,
+    balance_cap: Optional[int],
+    threshold: Optional[int],
+) -> Path:
+    dataset_name = Path(root).resolve().name
+    base = Path(split_output_dir)
+    split_base = base / persist_splits_dir / dataset_name
+
+    bal_tag = "balmin0"
+    if balance_to_min:
+        bal_tag = "balmin_auto" if balance_cap is None else f"balmin_cap{int(balance_cap)}"
+    thr_tag = "thrnone" if threshold is None else f"thrgt{int(threshold)}"
+
+    return (
+        split_base
+        / f"seed_{seed}_t{train_frac}_v{val_frac}_s{img_size}_{bal_tag}_{thr_tag}"
+    )
+
+
+def _load_indices(split_dir: Path):
+    def _load(name: str):
+        p = split_dir / f"{name}_idx.json"
+        if not p.exists():
+            raise FileNotFoundError(f"Missing split file: {p}")
+        return np.array(json.loads(p.read_text()), dtype=int)
+
+    train_idx = _load("train")
+    val_idx = _load("val")
+    test_idx = _load("test")
+    return train_idx, val_idx, test_idx
+
+
+def _build_transforms(img_size: int = 224):
+    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    t_train = transforms.Compose(
+        [
+            transforms.Resize(int(img_size * 1.15)),
+            transforms.RandomResizedCrop(img_size),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize,
+        ]
+    )
+    t_eval = transforms.Compose(
+        [
+            transforms.Resize(int(img_size * 1.15)),
+            transforms.CenterCrop(img_size),
+            transforms.ToTensor(),
+            normalize,
+        ]
+    )
+    return t_train, t_eval
+
+
+def build_dataloaders_from_splits(
+    root: str,
+    split_output_dir: str = SPLIT_OUTPUT_DIR,
+    persist_splits_dir: str = PERSIST_SPLITS_DIR,
+    seed: int = SPLIT_SEED,
+    train_frac: float = TRAIN_FRAC,
+    val_frac: float = VAL_FRAC,
+    img_size: int = IMG_SIZE_DEFAULT,
     batch_size: int = 64,
     workers: int = 4,
-    seed: int = 42,
-) -> Tuple[
-    DataLoader,
-    DataLoader,
-    DataLoader,
-    List[str],
-    datasets.ImageFolder,
-    datasets.ImageFolder,
-]:
-    """Build train, validation, and test data loaders with augmentation.
+    balance_to_min: bool = BALANCE_TO_MIN,
+    balance_cap: Optional[int] = BALANCE_CAP,
+    threshold: Optional[int] = THRESHOLD,
+) -> Tuple[DataLoader, DataLoader, DataLoader, List[str], Dict[int, int]]:
+    base = datasets.ImageFolder(root=root, is_valid_file=_is_valid_file)
+    idx_to_name = {v: k for k, v in base.class_to_idx.items()}
 
-    If `root` contains train/val/test subfolders, use them.
-    Otherwise, assume a single folder-of-classes layout and create a
-    reproducible 70/15/15 stratified split.
-    """
-    import numpy as np
+    split_dir = _resolve_split_dir(
+        root,
+        split_output_dir,
+        persist_splits_dir,
+        seed,
+        train_frac,
+        val_frac,
+        img_size,
+        balance_to_min,
+        balance_cap,
+        threshold,
+    )
+    train_idx, val_idx, test_idx = _load_indices(split_dir)
 
-    train_dir = os.path.join(root, "train")
-    val_dir = os.path.join(root, "val")
-    test_dir = os.path.join(root, "test")
-    has_split_dirs = all(os.path.isdir(p) for p in (train_dir, val_dir, test_dir))
+    all_idx = np.unique(np.concatenate([train_idx, val_idx, test_idx]))
+    targets_all = np.array(base.targets)
+    active_old_ids = sorted(set(int(t) for t in targets_all[all_idx]))
 
-    # ImageNet normalization
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
+    old_to_new = {old: new for new, old in enumerate(active_old_ids)}
+    new_to_old = {v: k for k, v in old_to_new.items()}
+    active_class_names = [idx_to_name[new_to_old[i]] for i in range(len(active_old_ids))]
 
-    # Training transforms with augmentation
-    train_tf = transforms.Compose(
-        [
-            transforms.Resize((img_size, img_size)),
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomRotation(degrees=15),
-            transforms.ColorJitter(
-                brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1
-            ),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std),
-        ]
+    t_train, t_eval = _build_transforms(img_size)
+    target_transform = lambda y: old_to_new[int(y)]
+
+    ds_train_full = datasets.ImageFolder(
+        root=root,
+        transform=t_train,
+        is_valid_file=_is_valid_file,
+        target_transform=target_transform,
+    )
+    ds_val_full = datasets.ImageFolder(
+        root=root,
+        transform=t_eval,
+        is_valid_file=_is_valid_file,
+        target_transform=target_transform,
+    )
+    ds_test_full = datasets.ImageFolder(
+        root=root,
+        transform=t_eval,
+        is_valid_file=_is_valid_file,
+        target_transform=target_transform,
     )
 
-    # Evaluation transforms (no augmentation)
-    eval_tf = transforms.Compose(
-        [
-            transforms.Resize((img_size, img_size)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean, std),
-        ]
-    )
+    ds_train = Subset(ds_train_full, train_idx.tolist())
+    ds_val = Subset(ds_val_full, val_idx.tolist())
+    ds_test = Subset(ds_test_full, test_idx.tolist())
 
     worker_init = make_worker_init_fn(seed)
-    train_gen = make_generator(seed)
-
-    if has_split_dirs:
-        # ---- original behavior
-        train_ds = datasets.ImageFolder(train_dir, transform=train_tf)
-        val_ds = datasets.ImageFolder(val_dir, transform=eval_tf)
-        test_ds = datasets.ImageFolder(test_dir, transform=eval_tf)
-        classes = train_ds.classes
-
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=workers,
-            pin_memory=True,
-            worker_init_fn=worker_init,
-            generator=train_gen,
-        )
-        val_loader = DataLoader(
-            val_ds,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=workers,
-            pin_memory=True,
-            worker_init_fn=worker_init,
-        )
-        test_loader = DataLoader(
-            test_ds,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=workers,
-            pin_memory=True,
-            worker_init_fn=worker_init,
-        )
-        return train_loader, val_loader, test_loader, classes, val_ds, test_ds
-
-    # ---- fallback: single root with class subfolders (your WBC layout)
-    base = datasets.ImageFolder(root, transform=None)  # no transform yet
-    classes = base.classes
-    targets = np.array(base.targets)
-    n_classes = len(classes)
-
-    rng = np.random.RandomState(seed)
-    idx_all = np.arange(len(targets))
-
-    train_idx, val_idx, test_idx = [], [], []
-    for c in range(n_classes):
-        cls_idx = idx_all[targets == c]
-        rng.shuffle(cls_idx)
-        n = len(cls_idx)
-        # 70/15/15 split per class (reproducible)
-        n_train = int(round(0.70 * n))
-        n_val = int(round(0.15 * n))
-        n_train = min(n_train, n)  # safety
-        n_val = min(n_val, n - n_train)
-        # Remaining go to test
-        t, v, te = np.split(cls_idx, [n_train, n_train + n_val])
-        train_idx.extend(t.tolist())
-        val_idx.extend(v.tolist())
-        test_idx.extend(te.tolist())
-
-    # Build three datasets that share the same samples but have different transforms
-    train_ds_full = datasets.ImageFolder(root, transform=train_tf)
-    val_ds_full = datasets.ImageFolder(root, transform=eval_tf)
-    test_ds_full = datasets.ImageFolder(root, transform=eval_tf)
-
-    train_ds = Subset(train_ds_full, train_idx)
-    val_ds = Subset(val_ds_full, val_idx)
-    test_ds = Subset(test_ds_full, test_idx)
+    gen = make_generator(seed)
+    pin_mem = torch.cuda.is_available()
 
     train_loader = DataLoader(
-        train_ds,
+        ds_train,
         batch_size=batch_size,
         shuffle=True,
         num_workers=workers,
-        pin_memory=True,
+        pin_memory=pin_mem,
         worker_init_fn=worker_init,
-        generator=train_gen,
+        generator=gen,
     )
     val_loader = DataLoader(
-        val_ds,
+        ds_val,
         batch_size=batch_size,
         shuffle=False,
         num_workers=workers,
-        pin_memory=True,
+        pin_memory=pin_mem,
         worker_init_fn=worker_init,
     )
     test_loader = DataLoader(
-        test_ds,
+        ds_test,
         batch_size=batch_size,
         shuffle=False,
         num_workers=workers,
-        pin_memory=True,
+        pin_memory=pin_mem,
         worker_init_fn=worker_init,
     )
-    return train_loader, val_loader, test_loader, classes, val_ds, test_ds
 
+    y_train_old = targets_all[train_idx]
+    y_val_old = targets_all[val_idx]
+    y_test_old = targets_all[test_idx]
+    y_train_new = np.array([old_to_new[int(y)] for y in y_train_old])
+    y_val_new = np.array([old_to_new[int(y)] for y in y_val_old])
+    y_test_new = np.array([old_to_new[int(y)] for y in y_test_old])
 
-def make_fixed_random_eval_subset(
-    ds, batch_size: int, max_batches: Optional[int], seed: int
-) -> Optional[DataLoader]:
-    """Create a fixed random subset for evaluation."""
-    if max_batches is None:
-        return None
-    n = min(len(ds), max_batches * batch_size)
-    g = torch.Generator()
-    g.manual_seed(seed)
-    idx = torch.randperm(len(ds), generator=g)[:n].tolist()
-    sub = Subset(ds, idx)
-    return DataLoader(sub, batch_size=batch_size, shuffle=False)
+    n_total = len(active_class_names)
+    n_train = int(np.unique(y_train_new).size)
+    n_val = int(np.unique(y_val_new).size)
+    n_test = int(np.unique(y_test_new).size)
+
+    print("\n[Splits]")
+    print(f"  path   : {split_dir}")
+    print(f"  classes: total_active={n_total}, train={n_train}, val={n_val}, test={n_test}")
+    print(f"  names  : {active_class_names}")
+
+    return train_loader, val_loader, test_loader, active_class_names, old_to_new
 
 
 # ----------------------------
@@ -409,7 +570,7 @@ def make_fixed_random_eval_subset(
 def evaluate_with_cm(
     model: nn.Module, loader: DataLoader, device: torch.device, num_classes: int
 ):
-    """Evaluate model and return accuracy and confusion matrix."""
+    """Evaluate model and return accuracy, confusion matrix, and raw preds."""
     model.eval()
     all_true = []
     all_pred = []
@@ -439,7 +600,7 @@ def evaluate_with_cm(
         r, c = cm.shape
         full_cm[:r, :c] = cm
         cm = full_cm
-    return acc, cm
+    return acc, cm, y_true, y_pred
 
 
 @torch.no_grad()
@@ -495,6 +656,9 @@ class FinetuneConfig:
     dropout_rate: float = 0.1  # Added dropout
     weight_decay: float = 1e-4  # Added weight decay
     out_dir: Optional[str] = None  # per-run directory; if None, no checkpoints
+    threshold: Optional[int] = THRESHOLD
+    balance_to_min: bool = BALANCE_TO_MIN
+    balance_cap: Optional[int] = BALANCE_CAP
 
 
 # ----------------------------
@@ -513,12 +677,21 @@ def train_one_config(
         else "mps" if torch.backends.mps.is_available() else "cpu"
     )
 
-    train_loader, val_loader, test_loader, classes, _, _ = build_dataloaders(
-        data_root,
+    (
+        train_loader,
+        val_loader,
+        test_loader,
+        classes,
+        _label_map,
+    ) = build_dataloaders_from_splits(
+        root=data_root,
         img_size=cfg.img_size,
         batch_size=cfg.batch_size,
         workers=cfg.workers,
         seed=cfg.seed,
+        threshold=cfg.threshold,
+        balance_to_min=cfg.balance_to_min,
+        balance_cap=cfg.balance_cap,
     )
     num_classes = len(classes)
 
@@ -586,7 +759,7 @@ def train_one_config(
         val_f1 = f1_macro_from_preds_labels(val_preds, val_labels, num_classes)
 
         # Get validation confusion matrix and detailed metrics
-        val_acc_cm, val_cm = evaluate_with_cm(
+        val_acc_cm, val_cm, _, _ = evaluate_with_cm(
             model, val_loader, device, num_classes
         )
         val_TP, val_FP, val_TN, val_FN, val_wsens, val_wspec = (
@@ -665,18 +838,26 @@ def train_one_config(
         model.load_state_dict(best_state["state_dict"])
 
     # Test metrics
-    test_loss, test_acc, preds, labs = evaluate_with_loss(
+    test_loss, test_acc, _, _ = evaluate_with_loss(
         model, test_loader, device
     )
-    test_f1 = f1_macro_from_preds_labels(preds, labs, num_classes)
 
     # Get confusion matrix and detailed metrics
-    test_acc_cm, test_cm = evaluate_with_cm(
+    test_acc_cm, test_cm, y_true_test, y_pred_test = evaluate_with_cm(
         model, test_loader, device, num_classes
     )
     test_TP, test_FP, test_TN, test_FN, test_wsens, test_wspec = (
         compute_sensitivity_specificity_multiclass(test_cm)
     )
+
+    report_test = classification_report(
+        y_true_test,
+        y_pred_test,
+        target_names=classes,
+        zero_division=0,
+        output_dict=True,
+    )
+    test_f1 = float(report_test.get("macro avg", {}).get("f1-score", 0.0))
 
     print(f"\nFinal Results:")
     print(f"Test Loss: {test_loss:.4f}")
@@ -687,6 +868,17 @@ def train_one_config(
     )
     print(f"Test Weighted Sensitivity: {test_wsens:.4f}")
     print(f"Test Weighted Specificity: {test_wspec:.4f}")
+
+    if cfg.out_dir:
+        os.makedirs(cfg.out_dir, exist_ok=True)
+        cm_png = os.path.join(cfg.out_dir, "test_confusion_matrix.png")
+        cmn_png = os.path.join(cfg.out_dir, "test_confusion_matrix_normalized.png")
+        rep_csv = os.path.join(cfg.out_dir, "test_classification_report.csv")
+        rep_png = os.path.join(cfg.out_dir, "test_classification_report.png")
+
+        save_confusion_matrix_figure(test_cm, classes, cm_png, normalize=False)
+        save_confusion_matrix_figure(test_cm, classes, cmn_png, normalize=True)
+        save_classification_report_csv_and_image(report_test, classes, rep_csv, rep_png)
 
     gen_gap = (
         float(best_val_loss - hist["train_loss"][best_epoch - 1])
@@ -872,7 +1064,7 @@ if __name__ == "__main__":
     )
 
     # ✅ Your dataset with 13 class folders
-    main_data_root = Path("/data3/datasets/WBC_Our_dataset").resolve()
+    main_data_root = Path(DATA_ROOT).resolve()
 
     # ✅ Writeable locations for models & CSV
     sweep_out_root = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_donwsampled"
