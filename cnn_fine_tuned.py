@@ -7,9 +7,11 @@ distance for inference while maintaining all data loaders, random freezes,
 and reproducibility.
 """
 
+import argparse
 import csv
 import itertools
 import json
+import datetime as dt
 from dataclasses import dataclass
 import os
 from typing import Tuple, List, Optional, Dict, Any
@@ -25,6 +27,15 @@ from torchvision import datasets, transforms, models
 from tqdm.auto import tqdm
 from sklearn.metrics import confusion_matrix, classification_report
 
+from cli_utils import (
+    append_row_to_csv,
+    build_config_dict,
+    ensure_csv_with_header,
+    instantiate_config,
+    optional_int,
+    parse_grid_argument,
+)
+
 
 # ----------------------------
 # Paths & configuration (mirrors hyperbolic script)
@@ -32,6 +43,8 @@ from sklearn.metrics import confusion_matrix, classification_report
 DATA_ROOT = "/data3/datasets/WBC_Our_dataset"
 SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT"
 PERSIST_SPLITS_DIR = "splits"
+RUNS_DIR = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_donwsampled"
+RESULTS_CSV = "/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_downsampled.csv"
 
 TRAIN_FRAC = 0.7
 VAL_FRAC = 0.15
@@ -44,6 +57,39 @@ BALANCE_TO_MIN: bool = False
 BALANCE_CAP: Optional[int] = None
 
 ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
+
+DEFAULT_PARAM_GRID = {
+    "feature_dim": [64, 128, 256],
+    "batch_size": [512],
+    "learning_rate": [1e-4, 1e-3, 5e-3],
+    "img_size": [224],
+    "seed": [42],
+    "dropout_rate": [0.2],
+    "weight_decay": [1e-4],
+}
+
+CSV_SUMMARY_FIELDS = [
+    "run_name",
+    "timestamp_iso",
+    "best_epoch",
+    "stopped_due_to_overfit",
+    "gen_gap_val_train_loss",
+    "test_loss",
+    "test_acc",
+    "test_f1_macro",
+    "val_TP_total",
+    "val_FP_total",
+    "val_TN_weighted",
+    "val_FN_total",
+    "val_weighted_sensitivity",
+    "val_weighted_specificity",
+    "test_TP_total",
+    "test_FP_total",
+    "test_TN_weighted",
+    "test_FN_total",
+    "test_weighted_sensitivity",
+    "test_weighted_specificity",
+]
 
 
 # ----------------------------
@@ -659,6 +705,11 @@ class FinetuneConfig:
     threshold: Optional[int] = THRESHOLD
     balance_to_min: bool = BALANCE_TO_MIN
     balance_cap: Optional[int] = BALANCE_CAP
+    split_seed: int = SPLIT_SEED
+    train_frac: float = TRAIN_FRAC
+    val_frac: float = VAL_FRAC
+    split_output_dir: str = SPLIT_OUTPUT_DIR
+    persist_splits_dir: str = PERSIST_SPLITS_DIR
 
 
 # ----------------------------
@@ -685,10 +736,14 @@ def train_one_config(
         _label_map,
     ) = build_dataloaders_from_splits(
         root=data_root,
+        split_output_dir=cfg.split_output_dir,
+        persist_splits_dir=cfg.persist_splits_dir,
+        seed=cfg.split_seed,
+        train_frac=cfg.train_frac,
+        val_frac=cfg.val_frac,
         img_size=cfg.img_size,
         batch_size=cfg.batch_size,
         workers=cfg.workers,
-        seed=cfg.seed,
         threshold=cfg.threshold,
         balance_to_min=cfg.balance_to_min,
         balance_cap=cfg.balance_cap,
@@ -946,150 +1001,217 @@ def run_sweep_and_save_csv(
     data_root: str,
     out_root: str,
     csv_path: str,
-    grid: dict,
+    grid: Dict[str, List[Any]],
+    base_config: Optional[Dict[str, Any]] = None,
+    epochs: Optional[int] = None,
+    hp_keys: Optional[List[str]] = None,
 ):
-    """
-    Run hyperparameter sweep and save results to CSV.
-
-    Args:
-        data_root: Path to dataset
-        out_root: Output directory for runs
-        csv_path: Path to save CSV results
-        grid: Dictionary of parameter_name -> list of values
-    """
+    """Run a hyper-parameter sweep and persist results."""
     os.makedirs(out_root, exist_ok=True)
-    keys = list(grid.keys())
-    combos = list(itertools.product(*[grid[k] for k in keys]))
+    hp_order = hp_keys or sorted(grid.keys())
+    fieldnames = hp_order + CSV_SUMMARY_FIELDS
+    ensure_csv_with_header(csv_path, fieldnames)
 
-    # CSV header
-    fieldnames = [
-        "feature_dim",
-        "batch_size",
-        "learning_rate",
-        "img_size",
-        "seed",
-        "dropout_rate",
-        "weight_decay",
-        "best_epoch",
-        "stopped_due_to_overfit",
-        "gen_gap_val_train_loss",
-        "test_loss",
-        "test_acc",
-        "test_f1_macro",
-        # Detailed validation metrics
-        "val_TP_total",
-        "val_FP_total",
-        "val_TN_weighted",
-        "val_FN_total",
-        "val_weighted_sensitivity",
-        "val_weighted_specificity",
-        # Detailed test metrics
-        "test_TP_total",
-        "test_FP_total",
-        "test_TN_weighted",
-        "test_FN_total",
-        "test_weighted_sensitivity",
-        "test_weighted_specificity",
-    ]
-    new_file = not os.path.exists(csv_path)
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if new_file:
-            writer.writeheader()
+    base_cfg = build_config_dict(FinetuneConfig)
+    if base_config:
+        base_cfg.update({k: v for k, v in base_config.items() if v is not None})
 
-        for i, combo in enumerate(combos, 1):
-            cfg_kwargs = {k: v for k, v in zip(keys, combo)}
-            # Per-run output dir (optional, can comment out)
-            # FIX: iterate (k, v) pairs correctly
-            run_name = "_".join(f"{k}={str(v)}" for k, v in cfg_kwargs.items())
-            cfg = FinetuneConfig(
-                **cfg_kwargs, out_dir=os.path.join(out_root, run_name)
-            )
+    combos = list(itertools.product(*[grid[k] for k in hp_order]))
+    for i, combo in enumerate(combos, 1):
+        params = {k: v for k, v in zip(hp_order, combo)}
+        cfg_dict = dict(base_cfg)
+        cfg_dict.update(params)
+        if epochs is not None:
+            cfg_dict["epochs"] = epochs
+        run_name = "_".join(f"{k}={str(v)}" for k, v in params.items())
+        cfg_dict["out_dir"] = os.path.join(out_root, run_name)
+        cfg = FinetuneConfig(**cfg_dict)
 
-            print(f"\n=== [{i}/{len(combos)}] Running: {run_name} ===")
-            result = train_one_config(data_root, cfg)
+        print(f"\n=== [{i}/{len(combos)}] Running: {run_name} ===")
+        result = train_one_config(data_root, cfg)
 
-            # Write to CSV
-            row = {
-                **{
-                    k: getattr(cfg, k)
-                    for k in [
-                        "feature_dim",
-                        "batch_size",
-                        "learning_rate",
-                        "img_size",
-                        "seed",
-                        "dropout_rate",
-                        "weight_decay",
-                    ]
-                },
-                **{
-                    k: result[k]
-                    for k in [
-                        "best_epoch",
-                        "stopped_due_to_overfit",
-                        "gen_gap_val_train_loss",
-                        "test_loss",
-                        "test_acc",
-                        "test_f1_macro",
-                        # Detailed validation metrics
-                        "val_TP_total",
-                        "val_FP_total",
-                        "val_TN_weighted",
-                        "val_FN_total",
-                        "val_weighted_sensitivity",
-                        "val_weighted_specificity",
-                        # Detailed test metrics
-                        "test_TP_total",
-                        "test_FP_total",
-                        "test_TN_weighted",
-                        "test_FN_total",
-                        "test_weighted_sensitivity",
-                        "test_weighted_specificity",
-                    ]
-                },
+        row = {k: cfg_dict.get(k) for k in hp_order}
+        row.update(
+            {
+                "run_name": run_name,
+                "timestamp_iso": dt.datetime.now().isoformat(timespec="seconds"),
             }
-            writer.writerow(row)
-            f.flush()
-            print("Wrote results to", csv_path)
+        )
+        row.update(result)
+        append_row_to_csv(csv_path, fieldnames, row)
+        print(f"Logged to {csv_path}: {run_name}")
 
 
 # ----------------------------
-# Main execution
+# CLI utilities
 # ----------------------------
-if __name__ == "__main__":
-    # Paths
-    PROJECT_ROOT = (
-        Path(__file__).parent if "__file__" in globals() else Path.cwd()
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="CNN baseline trainer with sweep and single-run modes.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    parser.add_argument("--data-root", default=DATA_ROOT, help="Path to the dataset root")
+    parser.add_argument(
+        "--runs-root",
+        default=RUNS_DIR,
+        help="Directory where per-run artifacts are written",
+    )
+    parser.add_argument(
+        "--results-csv",
+        default=RESULTS_CSV,
+        help="CSV file that collects sweep/single summaries",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["sweep", "single"],
+        default="sweep",
+        help="Run an entire grid sweep or a single configuration",
+    )
+    parser.add_argument(
+        "--grid",
+        help="JSON file or inline string describing the hyper-parameter grid",
+    )
+    parser.add_argument(
+        "--config",
+        help="JSON file or inline string with FinetuneConfig overrides",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Override the epoch budget for every run",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=optional_int,
+        default=THRESHOLD,
+        help="Intensity threshold used when building the persisted splits",
+    )
+    parser.add_argument(
+        "--balance-to-min",
+        dest="balance_to_min",
+        action="store_true",
+        default=BALANCE_TO_MIN,
+        help="Enable balancing to the smallest class",
+    )
+    parser.add_argument(
+        "--no-balance-to-min",
+        dest="balance_to_min",
+        action="store_false",
+        help="Disable class-count balancing",
+    )
+    parser.add_argument(
+        "--balance-cap",
+        type=optional_int,
+        default=BALANCE_CAP,
+        help="Optional cap applied when balancing to the minimum",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=SPLIT_SEED,
+        help="Seed component encoded inside the persisted split folders",
+    )
+    parser.add_argument(
+        "--train-frac",
+        type=float,
+        default=TRAIN_FRAC,
+        help="Training fraction used when the splits were created",
+    )
+    parser.add_argument(
+        "--val-frac",
+        type=float,
+        default=VAL_FRAC,
+        help="Validation fraction used when the splits were created",
+    )
+    parser.add_argument(
+        "--split-output-dir",
+        default=SPLIT_OUTPUT_DIR,
+        help="Root directory containing the persisted split metadata",
+    )
+    parser.add_argument(
+        "--persist-splits-dir",
+        default=PERSIST_SPLITS_DIR,
+        help="Relative directory inside the split root that stores JSON files",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Name for the single run (used only when mode=single)",
+    )
+    parser.add_argument(
+        "--single-out-dir",
+        default=None,
+        help="Explicit directory for single-run artifacts (defaults to runs-root/run-name)",
+    )
+    return parser
 
-    # ✅ Your dataset with 13 class folders
-    main_data_root = Path(DATA_ROOT).resolve()
 
-    # ✅ Writeable locations for models & CSV
-    sweep_out_root = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_donwsampled"
-    results_csv = "/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_downsampled.csv"
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    grid = parse_grid_argument(args.grid, DEFAULT_PARAM_GRID)
+    hp_keys = sorted(grid.keys())
 
-    # Optimized parameter grid for CNN classifier
-    param_grid = {
-        "feature_dim": [64, 128, 256],
-        "batch_size": [512],
-        "learning_rate": [1e-4, 1e-3, 5e-3],
-        "img_size": [224],
-        "seed": [42],
-        "dropout_rate": [0.2],
-        "weight_decay": [1e-4],
+    common_overrides = {
+        "threshold": args.threshold,
+        "balance_to_min": args.balance_to_min,
+        "balance_cap": args.balance_cap,
+        "split_seed": args.split_seed,
+        "train_frac": args.train_frac,
+        "val_frac": args.val_frac,
+        "split_output_dir": args.split_output_dir,
+        "persist_splits_dir": args.persist_splits_dir,
     }
 
-    print("Starting CNN classifier sweep...")
-    print(f"Data root: {main_data_root}")
-    print(f"Output root: {sweep_out_root}")
-    print(f"Results CSV: {results_csv}")
+    if args.mode == "sweep":
+        base_cfg = build_config_dict(
+            FinetuneConfig,
+            config_arg=args.config,
+            overrides=common_overrides,
+        )
+        print("Starting CNN classifier sweep...")
+        run_sweep_and_save_csv(
+            data_root=args.data_root,
+            out_root=args.runs_root,
+            csv_path=args.results_csv,
+            grid=grid,
+            base_config=base_cfg,
+            epochs=args.epochs,
+            hp_keys=hp_keys,
+        )
+        print("Sweep finished. CSV at:", args.results_csv)
+        return
 
-    run_sweep_and_save_csv(
-        data_root=str(main_data_root),
-        out_root=sweep_out_root,
-        csv_path=results_csv,
-        grid=param_grid,
+    run_name = args.run_name or "single_run"
+    if args.single_out_dir:
+        out_dir = args.single_out_dir
+    elif args.runs_root:
+        out_dir = os.path.join(args.runs_root, run_name)
+    else:
+        out_dir = None
+
+    cfg = instantiate_config(
+        FinetuneConfig,
+        config_arg=args.config,
+        overrides={**common_overrides, "epochs": args.epochs, "out_dir": out_dir},
     )
-    print("Sweep finished. CSV at:", results_csv)
+    metrics = train_one_config(args.data_root, cfg)
+    print(
+        f"Single run '{run_name}' finished with test_acc={metrics['test_acc']:.4f}"
+    )
+    fieldnames = hp_keys + CSV_SUMMARY_FIELDS
+    row = {k: getattr(cfg, k, None) for k in hp_keys}
+    row.update(
+        {
+            "run_name": run_name,
+            "timestamp_iso": dt.datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    row.update(metrics)
+    append_row_to_csv(args.results_csv, fieldnames, row)
+
+
+if __name__ == "__main__":
+    main()

@@ -9,6 +9,7 @@ Hyperbolic Prototype Classifier for Leukocyte Classification (dynamic #classes)
 Supported image formats: .jpg/.jpeg/.png/.tif/.tiff
 """
 
+import argparse
 import os
 import json
 import itertools
@@ -28,6 +29,15 @@ from sklearn.metrics import confusion_matrix, classification_report
 
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+from cli_utils import (
+    append_row_to_csv,
+    build_config_dict,
+    ensure_csv_with_header,
+    instantiate_config,
+    optional_int,
+    parse_grid_argument,
+)
 
 
 # ----------------------------
@@ -52,6 +62,40 @@ BALANCE_CAP: Optional[int] = None      # only used if BALANCE_TO_MIN=True
 # Model/output locations
 RUNS_DIR   = "/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_downsampled_6"
 RESULTS_CSV = "/data2/joc0027/venv/JYOT/sweep_new_wbc_downsampled_6.csv"
+
+DEFAULT_PARAM_GRID = {
+    "feature_dim": [256],
+    "init_curvature": [2.0],
+    "temperature": [1.0],
+    "batch_size": [512],
+    "lr_backbone": [1e-5, 3e-5, 1e-4],
+    "lr_head": [5e-3, 1e-2, 2e-2],
+    "lr_curvature": [1e-3, 3e-3, 5e-3],
+    "img_size": [224],
+    "seed": [42],
+}
+
+CSV_SUMMARY_FIELDS = [
+    "run_name",
+    "timestamp_iso",
+    "best_epoch",
+    "best_val_acc",
+    "test_acc",
+    "test_f1_macro",
+    "learned_c",
+    "val_TP_total",
+    "val_FP_total",
+    "val_TN_weighted",
+    "val_FN_total",
+    "val_weighted_sensitivity",
+    "val_weighted_specificity",
+    "test_TP_total",
+    "test_FP_total",
+    "test_TN_weighted",
+    "test_FN_total",
+    "test_weighted_sensitivity",
+    "test_weighted_specificity",
+]
 
 # Restrict file types explicitly
 ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
@@ -506,6 +550,14 @@ class FinetuneConfig:
     workers: int = 4
     seed: int = 42
     out_dir: Optional[str] = None
+    split_seed: int = SPLIT_SEED
+    train_frac: float = TRAIN_FRAC
+    val_frac: float = VAL_FRAC
+    threshold: Optional[int] = THRESHOLD
+    balance_to_min: bool = BALANCE_TO_MIN
+    balance_cap: Optional[int] = BALANCE_CAP
+    split_output_dir: str = SPLIT_OUTPUT_DIR
+    persist_splits_dir: str = PERSIST_SPLITS_DIR
 
 
 # ----------------------------
@@ -525,17 +577,17 @@ def train(
 
     train_loader, val_loader, test_loader, classes, _old2new = build_dataloaders_from_splits(
         root=data_root,
-        split_output_dir=SPLIT_OUTPUT_DIR,
-        persist_splits_dir=PERSIST_SPLITS_DIR,
-        seed=SPLIT_SEED,
-        train_frac=TRAIN_FRAC,
-        val_frac=VAL_FRAC,
+        split_output_dir=cfg.split_output_dir,
+        persist_splits_dir=cfg.persist_splits_dir,
+        seed=cfg.split_seed,
+        train_frac=cfg.train_frac,
+        val_frac=cfg.val_frac,
         img_size=cfg.img_size,
         batch_size=cfg.batch_size,
         workers=cfg.workers,
-        balance_to_min=BALANCE_TO_MIN,
-        balance_cap=BALANCE_CAP,
-        threshold=THRESHOLD,
+        balance_to_min=cfg.balance_to_min,
+        balance_cap=cfg.balance_cap,
+        threshold=cfg.threshold,
     )
 
     num_classes = len(classes)  # <-- dynamic
@@ -757,100 +809,226 @@ def make_run_name(params: Dict[str, Any]) -> str:
     return "_".join(p.replace("/", "-") for p in parts)
 
 
-def ensure_csv_with_header(path: str, fieldnames: List[str]):
-    exists = os.path.exists(path)
-    if not exists:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        import csv
-        with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-
-
 def run_sweep_and_save_csv(
     data_root: str,
     out_root: str,
     csv_path: str,
     grid: Dict[str, List[Any]],
     epochs: Optional[int] = None,
+    base_config: Optional[Dict[str, Any]] = None,
+    hp_keys: Optional[List[str]] = None,
 ):
     os.makedirs(out_root, exist_ok=True)
 
-    hp_keys = sorted(grid.keys())
-    summary_fields = [
-        "run_name", "timestamp_iso",
-        "best_epoch", "best_val_acc", "test_acc", "test_f1_macro", "learned_c",
-        "val_TP_total","val_FP_total","val_TN_weighted","val_FN_total",
-        "val_weighted_sensitivity","val_weighted_specificity",
-        "test_TP_total","test_FP_total","test_TN_weighted","test_FN_total",
-        "test_weighted_sensitivity","test_weighted_specificity",
-    ]
-    fieldnames = hp_keys + summary_fields
+    hp_order = hp_keys or sorted(grid.keys())
+    fieldnames = hp_order + CSV_SUMMARY_FIELDS
     ensure_csv_with_header(csv_path, fieldnames)
 
-    for params in iter_grid(grid):
-        run_epochs = epochs if epochs is not None else params.get("epochs", 25)
-        run_name = make_run_name(params)
-        run_out_dir = os.path.join(out_root, run_name)
+    base_cfg = build_config_dict(FinetuneConfig)
+    if base_config:
+        base_cfg.update({k: v for k, v in base_config.items() if v is not None})
 
-        cfg = FinetuneConfig(
-            feature_dim=params["feature_dim"],
-            init_curvature=params["init_curvature"],
-            temperature=params["temperature"],
-            batch_size=params["batch_size"],
-            epochs=run_epochs,
-            lr_backbone=params["lr_backbone"],
-            lr_head=params["lr_head"],
-            lr_curvature=params["lr_curvature"],
-            img_size=params["img_size"],
-            workers=4,
-            seed=params["seed"],
-            out_dir=run_out_dir,
-        )
+    for params in iter_grid(grid):
+        cfg_dict = dict(base_cfg)
+        cfg_dict.update(params)
+        if epochs is not None:
+            cfg_dict["epochs"] = epochs
+
+        run_name = make_run_name(params)
+        cfg_dict["out_dir"] = os.path.join(out_root, run_name)
+        cfg = FinetuneConfig(**cfg_dict)
 
         print(f"\n=== Running: {run_name} ===")
-        print("Using splits with:",
-              f"seed={SPLIT_SEED}, t={TRAIN_FRAC}, v={VAL_FRAC}, s={cfg.img_size}, "
-              f"balance_to_min={BALANCE_TO_MIN}, balance_cap={BALANCE_CAP}, threshold={THRESHOLD}")
+        print(
+            "Using splits with:",
+            f"seed={cfg.split_seed}, t={cfg.train_frac}, v={cfg.val_frac}, s={cfg.img_size}, ",
+            f"balance_to_min={cfg.balance_to_min}, balance_cap={cfg.balance_cap}, threshold={cfg.threshold}",
+        )
         metrics = train(data_root=data_root, cfg=cfg)
 
-        row = {k: params[k] for k in hp_keys}
-        row.update({
-            "run_name": run_name,
-            "timestamp_iso": dt.datetime.now().isoformat(timespec="seconds"),
-        })
+        row = {k: cfg_dict.get(k) for k in hp_order}
+        row.update(
+            {
+                "run_name": run_name,
+                "timestamp_iso": dt.datetime.now().isoformat(timespec="seconds"),
+            }
+        )
         row.update(metrics)
 
-        import csv
-        with open(csv_path, "a", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writerow(row)
-
+        append_row_to_csv(csv_path, fieldnames, row)
         print(f"Logged to {csv_path}: {run_name}")
 
 
 # ----------------------------
-# Entry point
+# CLI
 # ----------------------------
-if __name__ == "__main__":
-    param_grid = {
-        "feature_dim":   [256],
-        "init_curvature":[2.0],
-        "temperature":   [1.0],
-        "batch_size":    [512],
-        "lr_backbone":   [1e-5, 3e-5, 1e-4],
-        "lr_head":       [5e-3, 1e-2, 2e-2],
-        "lr_curvature":  [1e-3, 3e-3, 5e-3],
-        "img_size":      [224],
-        "seed":          [42],
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Hyperbolic classifier trainer with sweep and single-run modes.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument("--data-root", default=DATA_ROOT, help="Path to the dataset root")
+    parser.add_argument(
+        "--runs-root",
+        default=RUNS_DIR,
+        help="Directory where per-run artifacts are written",
+    )
+    parser.add_argument(
+        "--results-csv",
+        default=RESULTS_CSV,
+        help="CSV file that collects sweep/single summaries",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["sweep", "single"],
+        default="sweep",
+        help="Run an entire grid sweep or a single configuration",
+    )
+    parser.add_argument(
+        "--grid",
+        help="JSON file or inline string describing the hyper-parameter grid",
+    )
+    parser.add_argument(
+        "--config",
+        help="JSON file or inline string with FinetuneConfig overrides",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=None,
+        help="Override the epoch budget for every run",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=optional_int,
+        default=THRESHOLD,
+        help="Intensity threshold used when building the persisted splits",
+    )
+    parser.add_argument(
+        "--balance-to-min",
+        dest="balance_to_min",
+        action="store_true",
+        default=BALANCE_TO_MIN,
+        help="Enable balancing to the smallest class",
+    )
+    parser.add_argument(
+        "--no-balance-to-min",
+        dest="balance_to_min",
+        action="store_false",
+        help="Disable class-count balancing",
+    )
+    parser.add_argument(
+        "--balance-cap",
+        type=optional_int,
+        default=BALANCE_CAP,
+        help="Optional cap applied when balancing to the minimum",
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=SPLIT_SEED,
+        help="Seed component encoded inside the persisted split folders",
+    )
+    parser.add_argument(
+        "--train-frac",
+        type=float,
+        default=TRAIN_FRAC,
+        help="Training fraction used when the splits were created",
+    )
+    parser.add_argument(
+        "--val-frac",
+        type=float,
+        default=VAL_FRAC,
+        help="Validation fraction used when the splits were created",
+    )
+    parser.add_argument(
+        "--split-output-dir",
+        default=SPLIT_OUTPUT_DIR,
+        help="Root directory containing the persisted split metadata",
+    )
+    parser.add_argument(
+        "--persist-splits-dir",
+        default=PERSIST_SPLITS_DIR,
+        help="Relative directory inside the split root that stores JSON files",
+    )
+    parser.add_argument(
+        "--run-name",
+        default=None,
+        help="Name for the single run (used only when mode=single)",
+    )
+    parser.add_argument(
+        "--single-out-dir",
+        default=None,
+        help="Explicit directory for single-run artifacts (defaults to runs-root/run-name)",
+    )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    grid = parse_grid_argument(args.grid, DEFAULT_PARAM_GRID)
+    hp_keys = sorted(grid.keys())
+
+    common_overrides = {
+        "threshold": args.threshold,
+        "balance_to_min": args.balance_to_min,
+        "balance_cap": args.balance_cap,
+        "split_seed": args.split_seed,
+        "train_frac": args.train_frac,
+        "val_frac": args.val_frac,
+        "split_output_dir": args.split_output_dir,
+        "persist_splits_dir": args.persist_splits_dir,
     }
 
-    print("Starting hyperbolic classifier sweep (dynamic classes) using pre-existing splits...")
-    run_sweep_and_save_csv(
-        data_root=DATA_ROOT,
-        out_root=RUNS_DIR,
-        csv_path=RESULTS_CSV,
-        grid=param_grid,
-        epochs=25,
+    if args.mode == "sweep":
+        base_cfg = build_config_dict(
+            FinetuneConfig,
+            config_arg=args.config,
+            overrides=common_overrides,
+        )
+        print("Starting hyperbolic classifier sweep...")
+        run_sweep_and_save_csv(
+            data_root=args.data_root,
+            out_root=args.runs_root,
+            csv_path=args.results_csv,
+            grid=grid,
+            epochs=args.epochs,
+            base_config=base_cfg,
+            hp_keys=hp_keys,
+        )
+        print("Sweep finished.")
+        return
+
+    # Single run
+    run_name = args.run_name or "single_run"
+    if args.single_out_dir:
+        out_dir = args.single_out_dir
+    elif args.runs_root:
+        out_dir = os.path.join(args.runs_root, run_name)
+    else:
+        out_dir = None
+
+    cfg = instantiate_config(
+        FinetuneConfig,
+        config_arg=args.config,
+        overrides={**common_overrides, "epochs": args.epochs, "out_dir": out_dir},
     )
-    print("Sweep finished.")
+    metrics = train(data_root=args.data_root, cfg=cfg)
+
+    print(f"Single run '{run_name}' finished with test_acc={metrics['test_acc']:.4f}")
+    fieldnames = hp_keys + CSV_SUMMARY_FIELDS
+    row = {k: getattr(cfg, k, None) for k in hp_keys}
+    row.update(
+        {
+            "run_name": run_name,
+            "timestamp_iso": dt.datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    row.update(metrics)
+    append_row_to_csv(args.results_csv, fieldnames, row)
+
+
+if __name__ == "__main__":
+    main()
