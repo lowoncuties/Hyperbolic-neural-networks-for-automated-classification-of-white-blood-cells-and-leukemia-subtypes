@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Euclidean Distance-Based Classifier for Leukocyte Detection and Classification
+Euclidean Distance-Based Classifier for White Blood Cell and Leukemia Subtype Classification
 
 This script converts the hyperbolic classifier to use classical Euclidean
 distance for inference while maintaining all data loaders, random freezes,

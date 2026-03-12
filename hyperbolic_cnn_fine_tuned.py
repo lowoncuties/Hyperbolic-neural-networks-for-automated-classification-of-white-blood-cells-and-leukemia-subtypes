@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hyperbolic Prototype Classifier for Leukocyte Classification (dynamic #classes)
+Hyperbolic Prototype Classifier for White Blood Cell and Leukemia Subtype Classification (dynamic #classes)
 
 - Images: class-subfolder layout at /data3/datasets/WBC_Our_dataset
 - Splits: pre-generated JSON index files (match the flags used when creating them)

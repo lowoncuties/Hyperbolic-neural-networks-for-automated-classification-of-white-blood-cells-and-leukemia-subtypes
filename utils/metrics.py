@@ -1,4 +1,4 @@
-"""Shared metric helpers for the leukemia classifiers."""
+"""Shared metric helpers for white blood cell and leukemia subtype classifiers."""
 
 from __future__ import annotations
 

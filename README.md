@@ -1,6 +1,6 @@
-# Hyperbolic CNN for Leukemia Classification
+# Hyperbolic neural networks for automated classification of white blood cells and leukemia subtypes in peripheral blood smears
 
-This repository contains two complementary training pipelines for leukocyte classification:
+This repository contains two complementary training pipelines for automated white blood cell and leukemia subtype classification:
 
 - `hyperbolic_cnn_fine_tuned.py` – a ResNet-50 backbone with a hyperbolic prototype head.
 - `cnn_fine_tuned.py` – a Euclidean baseline that mirrors the data pipeline and sweep utilities.
@@ -9,7 +9,7 @@ Both scripts now expose a modern CLI that supports single-run experiments and fu
 
 ## Dataset and splits
 
-The trainers assume an ImageFolder-compatible directory structure where each leukocyte class has its own folder under `DATA_ROOT`. Pre-computed splits are resolved automatically by matching the `split_seed`, thresholding, and balancing arguments to the on-disk metadata. Use `--split-output-dir` and `--persist-splits-dir` to point at custom split repositories if required.
+The trainers assume an ImageFolder-compatible directory structure where each cell class has its own folder under `DATA_ROOT`. Pre-computed splits are resolved automatically by matching the `split_seed`, thresholding, and balancing arguments to the on-disk metadata. Use `--split-output-dir` and `--persist-splits-dir` to point at custom split repositories if required.
 
 ## Running sweeps
 

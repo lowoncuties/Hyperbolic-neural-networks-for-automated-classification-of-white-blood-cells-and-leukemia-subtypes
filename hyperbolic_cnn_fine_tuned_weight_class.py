@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hyperbolic Prototype Classifier for Leukocyte Classification (dynamic #classes)
+Hyperbolic Prototype Classifier for White Blood Cell and Leukemia Subtype Classification (dynamic #classes)
 with Imbalance Handling:
 - Class-balanced sampler (inverse-count^power)
 - Class-Balanced Focal Loss (CB-Focal) with Deferred Re-Weighting (warm-up)
