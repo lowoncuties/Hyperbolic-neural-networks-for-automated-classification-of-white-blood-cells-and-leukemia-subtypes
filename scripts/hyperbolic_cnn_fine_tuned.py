@@ -2,9 +2,10 @@
 """
 Hyperbolic Prototype Classifier for White Blood Cell and Leukemia Subtype Classification (dynamic #classes)
 
-- Images: class-subfolder layout at /data3/datasets/WBC_Our_dataset
+- Images: class-subfolder layout at /data3/datasets/WBC_Our_dataset_extended
 - Splits: pre-generated JSON index files (match the flags used when creating them)
 - Head size: inferred from the splits after thresholding/balancing (no hard-coding)
+- Optional learnable temperature in the hyperbolic head
 
 Supported image formats: .jpg/.jpeg/.png/.tif/.tiff
 """
@@ -14,7 +15,9 @@ import os
 import json
 import itertools
 import datetime as dt
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Tuple, List, Optional, Dict, Any
 
 import numpy as np
@@ -27,6 +30,10 @@ from sklearn.metrics import confusion_matrix, classification_report
 
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from cli_utils import (
     append_row_to_csv,
@@ -52,8 +59,8 @@ from utils.reproducibility import set_global_seed
 # ----------------------------
 # Paths & configuration
 # ----------------------------
-DATA_ROOT = "/data3/datasets/WBC_Our_dataset"
-SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT"
+DATA_ROOT = "/data3/datasets/WBC_Our_dataset_extended"
+SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT_extended"
 PERSIST_SPLITS_DIR = "splits"
 
 # Must match how splits were generated
@@ -69,8 +76,8 @@ BALANCE_TO_MIN: bool = False           # False => balmin0, True => balmin_auto /
 BALANCE_CAP: Optional[int] = None      # only used if BALANCE_TO_MIN=True
 
 # Model/output locations
-RUNS_DIR   = "/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_downsampled_6"
-RESULTS_CSV = "/data2/joc0027/venv/JYOT/sweep_new_wbc_downsampled_6.csv"
+RUNS_DIR   = "/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_extended"
+RESULTS_CSV = "/data2/joc0027/venv/JYOT/sweep_new_wbc_extended.csv"
 
 DEFAULT_PARAM_GRID = {
     "feature_dim": [256],
@@ -92,6 +99,8 @@ CSV_SUMMARY_FIELDS = [
     "test_acc",
     "test_f1_macro",
     "learned_c",
+    "learnable_temperature",
+    "final_tau",
     "val_TP_total",
     "val_FP_total",
     "val_TN_weighted",
@@ -146,11 +155,13 @@ class FinetuneConfig:
     feature_dim: int = 128
     init_curvature: float = 1.0
     temperature: float = 1.0
+    learnable_temperature: bool = False
     batch_size: int = 64
     epochs: int = 25
     lr_backbone: float = 1e-4
     lr_head: float = 1e-2
     lr_curvature: float = 5e-3
+    lr_temperature: float = 1e-3
     img_size: int = 224
     workers: int = 4
     seed: int = 42
@@ -202,20 +213,28 @@ def train(
         num_classes=num_classes,
         init_curvature=cfg.init_curvature,
         temperature=cfg.temperature,
+        learnable_temperature=cfg.learnable_temperature,
     ).to(device)
 
     # Param groups
     euclid_backbone = [p for n, p in model.named_parameters() if n.startswith("backbone.")]
-    head_no_curv    = [p for n, p in model.named_parameters() if n.startswith("head.") and ("raw_c" not in n)]
+    head_no_curv_no_tau = [
+        p
+        for n, p in model.named_parameters()
+        if n.startswith("head.") and ("raw_c" not in n) and ("raw_tau" not in n)
+    ]
     curv_param      = [model.head.raw_c]
+    optimizer_groups = [
+        {"params": euclid_backbone, "lr": cfg.lr_backbone},
+        {"params": head_no_curv_no_tau, "lr": cfg.lr_head},
+        {"params": curv_param, "lr": cfg.lr_curvature},
+    ]
+    if cfg.learnable_temperature and model.head.raw_tau is not None:
+        optimizer_groups.append(
+            {"params": [model.head.raw_tau], "lr": cfg.lr_temperature}
+        )
 
-    optimizer = torch.optim.Adam(
-        [
-            {"params": euclid_backbone, "lr": cfg.lr_backbone},
-            {"params": head_no_curv,    "lr": cfg.lr_head},
-            {"params": curv_param,      "lr": cfg.lr_curvature},
-        ]
-    )
+    optimizer = torch.optim.Adam(optimizer_groups)
 
     best_val = 0.0
     best_epoch = 0
@@ -230,11 +249,11 @@ def train(
             with open(metrics_csv, "w", newline="") as f:
                 writer = csv.writer(f)
                 writer.writerow([
-                    "epoch","split","train_loss","accuracy","f1_macro","curvature_c",
+                    "epoch","split","train_loss","accuracy","f1_macro","curvature_c","temperature_tau",
                     "TP_total","FP_total","TN_weighted","FN_total","weighted_sensitivity","weighted_specificity"
                 ])
 
-    def _append_metrics_row(epoch, split, train_loss, acc, f1_macro, c_val,
+    def _append_metrics_row(epoch, split, train_loss, acc, f1_macro, c_val, tau_val,
                             TP_total, FP_total, TNw, FN_total, wsens, wspec):
         if not cfg.out_dir:
             return
@@ -248,6 +267,7 @@ def train(
                 (None if acc is None else f"{acc:.6f}"),
                 (None if f1_macro is None else f"{f1_macro:.6f}"),
                 (None if c_val is None else f"{c_val:.8f}"),
+                (None if tau_val is None else f"{tau_val:.8f}"),
                 int(TP_total) if TP_total is not None else None,
                 int(FP_total) if FP_total is not None else None,
                 f"{TNw:.6f}" if TNw is not None else None,
@@ -280,7 +300,8 @@ def train(
 
             with torch.no_grad():
                 c_val = float(model.head.current_c().detach().cpu())
-            pbar.set_postfix({"loss": f"{loss.item():.4f}", "c": f"{c_val:.4g}"})
+                tau_val = float(model.head.current_tau().detach().cpu())
+            pbar.set_postfix({"loss": f"{loss.item():.4f}", "c": f"{c_val:.4g}", "tau": f"{tau_val:.4g}"})
 
         train_loss = running_loss / max(1, n_seen)
 
@@ -294,6 +315,7 @@ def train(
 
         TP_total, FP_total, TNw, FN_total, wsens, wspec = compute_sensitivity_specificity_multiclass(val_cm)
         c_now = float(model.head.current_c().detach().cpu())
+        tau_now = float(model.head.current_tau().detach().cpu())
 
         # Save best checkpoint by val accuracy
         if cfg.out_dir:
@@ -311,6 +333,8 @@ def train(
                         "init_curvature": cfg.init_curvature,
                         "learned_c": c_now,
                         "temperature": cfg.temperature,
+                        "learnable_temperature": cfg.learnable_temperature,
+                        "final_tau": tau_now,
                         "epoch": epoch,
                         "val_acc": best_val,
                     },
@@ -319,9 +343,9 @@ def train(
 
         print(f"Epoch {epoch}: train_loss={train_loss:.4f} "
               f"val_acc={val_acc:.4f} val_f1_macro={val_f1_macro:.4f} "
-              f"(best_acc={best_val:.4f} @ {best_epoch}) c={c_now:.6f}")
+              f"(best_acc={best_val:.4f} @ {best_epoch}) c={c_now:.6f} tau={tau_now:.6f}")
 
-        _append_metrics_row(epoch, "val", train_loss, val_acc, val_f1_macro, c_now,
+        _append_metrics_row(epoch, "val", train_loss, val_acc, val_f1_macro, c_now, tau_now,
                             TP_total, FP_total, TNw, FN_total, wsens, wspec)
 
     # ---- final TEST metrics + artifacts
@@ -335,9 +359,10 @@ def train(
 
     T_TP, T_FP, T_TNw, T_FN, T_wsens, T_wspec = compute_sensitivity_specificity_multiclass(test_cm)
     c_final = float(model.head.current_c().detach().cpu())
+    tau_final = float(model.head.current_tau().detach().cpu())
 
     _append_metrics_row(best_epoch if best_epoch else cfg.epochs, "test",
-                        None, test_acc, test_f1_macro, c_final,
+                        None, test_acc, test_f1_macro, c_final, tau_final,
                         T_TP, T_FP, T_TNw, T_FN, T_wsens, T_wspec)
 
     # ---- save artifacts
@@ -362,6 +387,8 @@ def train(
                 "init_curvature": cfg.init_curvature,
                 "learned_c": c_final,
                 "temperature": cfg.temperature,
+                "learnable_temperature": cfg.learnable_temperature,
+                "final_tau": tau_final,
                 "epoch": cfg.epochs,
                 "val_acc": best_val,
                 "test_acc": test_acc,
@@ -382,6 +409,8 @@ def train(
         "test_acc": float(test_acc),
         "test_f1_macro": float(test_f1_macro),
         "learned_c": float(c_final),
+        "learnable_temperature": bool(cfg.learnable_temperature),
+        "final_tau": float(tau_final),
 
         # Last-epoch VAL (for reference)
         "val_TP_total": int(TP_total),
@@ -414,6 +443,10 @@ def make_run_name(params: Dict[str, Any]) -> str:
     return "_".join(p.replace("/", "-") for p in parts)
 
 
+def build_summary_fieldnames(hp_order: List[str]) -> List[str]:
+    return hp_order + [field for field in CSV_SUMMARY_FIELDS if field not in hp_order]
+
+
 def run_sweep_and_save_csv(
     data_root: str,
     out_root: str,
@@ -426,7 +459,7 @@ def run_sweep_and_save_csv(
     os.makedirs(out_root, exist_ok=True)
 
     hp_order = hp_keys or sorted(grid.keys())
-    fieldnames = hp_order + CSV_SUMMARY_FIELDS
+    fieldnames = build_summary_fieldnames(hp_order)
     ensure_csv_with_header(csv_path, fieldnames)
 
     base_cfg = build_config_dict(FinetuneConfig)
@@ -497,6 +530,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--config",
         help="JSON file or inline string with FinetuneConfig overrides",
+    )
+    parser.add_argument(
+        "--learnable-temperature",
+        dest="learnable_temperature",
+        action="store_true",
+        default=None,
+        help="Enable a learnable global temperature in the hyperbolic head",
+    )
+    parser.add_argument(
+        "--fixed-temperature",
+        dest="learnable_temperature",
+        action="store_false",
+        help="Disable learnable temperature and use a fixed tau",
+    )
+    parser.add_argument(
+        "--lr-temperature",
+        type=float,
+        default=None,
+        help="Learning rate for the learnable temperature parameter",
     )
     parser.add_argument(
         "--epochs",
@@ -585,6 +637,8 @@ def main() -> None:
         "val_frac": args.val_frac,
         "split_output_dir": args.split_output_dir,
         "persist_splits_dir": args.persist_splits_dir,
+        "learnable_temperature": args.learnable_temperature,
+        "lr_temperature": args.lr_temperature,
     }
 
     if args.mode == "sweep":
@@ -623,7 +677,7 @@ def main() -> None:
     metrics = train(data_root=args.data_root, cfg=cfg)
 
     print(f"Single run '{run_name}' finished with test_acc={metrics['test_acc']:.4f}")
-    fieldnames = hp_keys + CSV_SUMMARY_FIELDS
+    fieldnames = build_summary_fieldnames(hp_keys)
     row = {k: getattr(cfg, k, None) for k in hp_keys}
     row.update(
         {

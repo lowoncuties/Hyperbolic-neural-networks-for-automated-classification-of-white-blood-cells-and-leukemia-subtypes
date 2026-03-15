@@ -1,113 +1,175 @@
 # Hyperbolic neural networks for automated classification of white blood cells and leukemia subtypes in peripheral blood smears
 
-This repository contains two complementary training pipelines for automated white blood cell and leukemia subtype classification:
+This repository keeps the clean modular training library as the canonical implementation.
 
-- `hyperbolic_cnn_fine_tuned.py` – a ResNet-50 backbone with a hyperbolic prototype head.
-- `cnn_fine_tuned.py` – a Euclidean baseline that mirrors the data pipeline and sweep utilities.
+Official entrypoints:
 
-Both scripts now expose a modern CLI that supports single-run experiments and full sweeps with reproducible CSV logging. Helper utilities live in `cli_utils.py`.
+- `scripts/hyperbolic_cnn_fine_tuned.py`: ResNet-18 backbone with a hyperbolic prototype head
+- `scripts/cnn_fine_tuned.py`: ResNet-18 Euclidean baseline with the same split/CLI utilities
 
-## Dataset and splits
+Reference-only migration scripts:
 
-The trainers assume an ImageFolder-compatible directory structure where each cell class has its own folder under `DATA_ROOT`. Pre-computed splits are resolved automatically by matching the `split_seed`, thresholding, and balancing arguments to the on-disk metadata. Use `--split-output-dir` and `--persist-splits-dir` to point at custom split repositories if required.
+- `scripts/hyperbolic_cnn_learnable_temp.py`
+- `scripts/cnn_fine_tuned_new.py`
 
-## Running sweeps
+The migration behavior from those scripts has been folded into the clean library without copying their duplicated data, metrics, and reporting code back into the main implementation.
 
-Sweeps iterate over a hyper-parameter grid encoded as a JSON dictionary (`parameter_name -> [values...]`). The JSON can be supplied inline or via file path:
+## Defaults
+
+The clean scripts now default to the extended dataset setup:
+
+| Setting | Hyperbolic / CNN default |
+| --- | --- |
+| `DATA_ROOT` | `/data3/datasets/WBC_Our_dataset_extended` |
+| `SPLIT_OUTPUT_DIR` | `/data2/joc0027/venv/JYOT_extended` |
+| `PERSIST_SPLITS_DIR` | `splits` |
+| Hyperbolic `RUNS_DIR` | `/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_extended` |
+| Hyperbolic `RESULTS_CSV` | `/data2/joc0027/venv/JYOT/sweep_new_wbc_extended.csv` |
+| CNN `RUNS_DIR` | `/data2/joc0027/venv/JYOT/cnn_sweep_runs_extended` |
+| CNN `RESULTS_CSV` | `/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_extended.csv` |
+
+All of these can still be overridden from the CLI.
+
+## Model Notes
+
+- Both trainers use `torchvision.models.resnet18(weights=None)`.
+- The hyperbolic model learns curvature through `raw_c -> softplus -> clamp`.
+- The hyperbolic trainer supports two temperature modes:
+  - fixed tau baseline
+  - optional learnable tau, parameterized as `tau = softplus(raw_tau) + eps`
+- The Euclidean trainer remains the clean modular implementation already present in the library; only its defaults were updated to the extended dataset setup.
+
+## Dataset And Splits
+
+The trainers assume an `ImageFolder` directory structure with one class directory per label. Persisted splits are resolved by matching:
+
+- `split_seed`
+- `train_frac`
+- `val_frac`
+- `img_size`
+- `threshold`
+- `balance_to_min`
+- `balance_cap`
+
+Use `--split-output-dir` and `--persist-splits-dir` if your split metadata lives elsewhere.
+
+## Running Sweeps
+
+Sweeps accept either an inline JSON grid or a path to a JSON file.
+
+Hyperbolic baseline sweep:
 
 ```bash
-python hyperbolic_cnn_fine_tuned.py \
+python scripts/hyperbolic_cnn_fine_tuned.py \
   --mode sweep \
-  --data-root /path/to/WBC_Our_dataset \
+  --data-root /path/to/WBC_Our_dataset_extended \
   --grid configs/hyperbolic_grid.json \
   --runs-root /experiments/hyperbolic_runs \
   --results-csv /experiments/hyperbolic_runs/results.csv
 ```
 
+Hyperbolic sweep with learnable temperature:
+
 ```bash
-python cnn_fine_tuned.py \
+python scripts/hyperbolic_cnn_fine_tuned.py \
   --mode sweep \
-  --data-root /path/to/WBC_Our_dataset \
-  --grid '{"feature_dim": [128, 256], "learning_rate": [1e-4, 1e-3]}' \
+  --data-root /path/to/WBC_Our_dataset_extended \
+  --learnable-temperature \
+  --lr-temperature 1e-3 \
+  --grid '{"feature_dim":[256],"init_curvature":[2.0],"temperature":[1.0],"batch_size":[256],"lr_backbone":[1e-4],"lr_head":[5e-3],"lr_curvature":[3e-3],"img_size":[224],"seed":[42]}' \
+  --runs-root /experiments/hyperbolic_runs \
+  --results-csv /experiments/hyperbolic_runs/results.csv
+```
+
+CNN sweep:
+
+```bash
+python scripts/cnn_fine_tuned.py \
+  --mode sweep \
+  --data-root /path/to/WBC_Our_dataset_extended \
+  --grid '{"feature_dim":[128,256],"learning_rate":[1e-4,1e-3]}' \
   --runs-root /experiments/cnn_runs \
   --results-csv /experiments/cnn_runs/results.csv
 ```
 
-Each run receives its own artifact directory (`runs-root/run_name`). A unified CSV (`results-csv`) is created automatically with run metadata, timestamps, and the full metric suite for validation and test splits.
+Each run receives its own artifact directory under `runs-root/run_name`.
 
-## Running a single configuration
+## Running A Single Configuration
 
-Single runs read a JSON configuration (inline or file) that maps directly onto the corresponding `FinetuneConfig` dataclass. Unknown fields are ignored, and unspecified fields fall back to the defaults defined in each script.
+Single runs read a JSON configuration that maps directly to the corresponding `FinetuneConfig`.
+
+Hyperbolic fixed-tau single run:
 
 ```bash
-python hyperbolic_cnn_fine_tuned.py \
+python scripts/hyperbolic_cnn_fine_tuned.py \
   --mode single \
-  --data-root /path/to/WBC_Our_dataset \
-  --config '{"feature_dim": 256, "lr_head": 0.01, "batch_size": 512}' \
+  --data-root /path/to/WBC_Our_dataset_extended \
+  --config '{"feature_dim":256,"lr_head":0.01,"batch_size":256}' \
   --run-name hyperbolic_baseline \
   --runs-root /experiments/hyperbolic_runs
 ```
 
+Hyperbolic learnable-tau single run:
+
 ```bash
-python cnn_fine_tuned.py \
+python scripts/hyperbolic_cnn_fine_tuned.py \
   --mode single \
-  --data-root /path/to/WBC_Our_dataset \
+  --data-root /path/to/WBC_Our_dataset_extended \
+  --learnable-temperature \
+  --lr-temperature 1e-3 \
+  --config '{"feature_dim":256,"temperature":1.0,"lr_head":0.01,"batch_size":256}' \
+  --run-name hyperbolic_learnable_tau \
+  --runs-root /experiments/hyperbolic_runs
+```
+
+CNN single run:
+
+```bash
+python scripts/cnn_fine_tuned.py \
+  --mode single \
+  --data-root /path/to/WBC_Our_dataset_extended \
   --config configs/cnn_single.json \
   --epochs 50 \
   --run-name euclidean_long_run
 ```
 
-If `--single-out-dir` is omitted, artifacts default to `runs-root/run-name`. Results are still appended to the CSV so the sweep and single-run histories share the same reporting surface.
+If `--single-out-dir` is omitted, artifacts default to `runs-root/run-name`.
 
-## Common CLI arguments
+## Common CLI Arguments
 
-Both scripts expose the same convenience flags:
+Both official scripts expose the same configuration pattern:
 
-| Argument | Description |
-| --- | --- |
-| `--data-root` | Absolute path to the ImageFolder dataset. |
-| `--runs-root` | Root directory where per-run checkpoints, confusion matrices, and reports are stored. |
-| `--results-csv` | CSV file that aggregates metrics across runs (created if missing). |
-| `--grid` | JSON dictionary describing a sweep grid. Accepts file paths or inline JSON strings. |
-| `--config` | JSON object that overrides `FinetuneConfig` fields for sweeps and single runs. |
-| `--epochs` | Optional global override for the epoch budget. |
-| `--threshold` | Intensity threshold used when generating split names. Accepts `null`/`None` to disable. |
-| `--balance-to-min` / `--no-balance-to-min` | Toggle the class-balancing logic used to create splits. |
-| `--balance-cap` | Optional cap applied when balancing; accepts `null`/`None` to remove the cap. |
-| `--split-seed`, `--train-frac`, `--val-frac` | Parameters that must match the metadata embedded in your persisted splits. |
-| `--split-output-dir`, `--persist-splits-dir` | Advanced knobs for pointing at custom split repositories. |
-| `--run-name`, `--single-out-dir` | Single-run naming and artifact placement controls. |
+- `--data-root`: dataset root
+- `--runs-root`: directory for run artifacts
+- `--results-csv`: aggregate CSV for sweep or single-run summaries
+- `--mode`: `sweep` or `single`
+- `--grid`: JSON grid for sweeps
+- `--config`: JSON config overrides
+- `--epochs`: optional epoch override
+- `--threshold`: split threshold; accepts `null`/`None`
+- `--balance-to-min` / `--no-balance-to-min`: split balancing toggle
+- `--balance-cap`: optional balancing cap; accepts `null`/`None`
+- `--split-seed`, `--train-frac`, `--val-frac`: split metadata controls
+- `--split-output-dir`, `--persist-splits-dir`: alternate split locations
+- `--run-name`, `--single-out-dir`: single-run naming and artifact placement
 
-The CLI automatically casts inline `null`/`None` strings to Python `None` for optional integer arguments.
+Hyperbolic-only temperature arguments:
 
-## Custom configurations
-
-- `--grid` JSON example:
-  ```json
-  {
-    "feature_dim": [128, 256, 512],
-    "learning_rate": [0.0001, 0.001],
-    "seed": [13, 42]
-  }
-  ```
-- `--config` JSON example:
-  ```json
-  {
-    "batch_size": 256,
-    "dropout_rate": 0.25,
-    "threshold": null,
-    "balance_to_min": true
-  }
-  ```
-
-These configs can live in version-controlled files (recommended for papers) or be provided inline during quick experiments.
+- `--learnable-temperature`: enable learnable tau
+- `--fixed-temperature`: force fixed tau
+- `--lr-temperature`: learning rate for `raw_tau` when learnable temperature is enabled
 
 ## Outputs
 
 Each run directory contains:
 
-- `best.pt` and `last.pt` checkpoints when `out_dir` is set.
-- Confusion matrices (raw and normalized) and classification report CSV/PNGs.
-- Logged CSV rows with timestamps and metrics for downstream analysis.
+- `best.pt` and `last.pt` checkpoints when `out_dir` is set
+- raw and normalized confusion matrices
+- classification report CSV/PNG artifacts
+- `metrics.csv` with per-epoch metrics
 
-The refactor keeps your experiments reproducible and portable, enabling automated sweeps directly from the CLI, which is ideal for paper-quality experimentation.
+For the hyperbolic trainer, the run artifacts and summary CSV also record:
+
+- curvature value
+- whether learnable temperature was enabled
+- final tau value

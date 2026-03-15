@@ -12,8 +12,10 @@ import csv
 import itertools
 import json
 import datetime as dt
+import sys
 from dataclasses import dataclass
 import os
+from pathlib import Path
 from typing import Tuple, List, Optional, Dict, Any
 import random
 import numpy as np
@@ -24,6 +26,10 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 from sklearn.metrics import confusion_matrix, classification_report
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from cli_utils import (
     append_row_to_csv,
@@ -49,11 +55,11 @@ from utils.reproducibility import set_global_seed
 # ----------------------------
 # Paths & configuration (mirrors hyperbolic script)
 # ----------------------------
-DATA_ROOT = "/data3/datasets/WBC_Our_dataset"
-SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT"
+DATA_ROOT = "/data3/datasets/WBC_Our_dataset_extended"
+SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT_extended"
 PERSIST_SPLITS_DIR = "splits"
-RUNS_DIR = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_donwsampled"
-RESULTS_CSV = "/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_downsampled.csv"
+RUNS_DIR = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_extended"
+RESULTS_CSV = "/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_extended.csv"
 
 TRAIN_FRAC = 0.7
 VAL_FRAC = 0.15
