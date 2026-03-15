@@ -13,6 +13,7 @@ import itertools
 import json
 from dataclasses import dataclass
 import os
+import sys
 from typing import Tuple, List, Optional, Dict, Any
 from pathlib import Path
 import random
@@ -26,13 +27,25 @@ from torchvision import datasets, transforms, models
 from tqdm.auto import tqdm
 from sklearn.metrics import confusion_matrix, classification_report
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from project_paths import (
+    DEFAULT_CNN_RESULTS_CSV,
+    DEFAULT_CNN_RUNS_DIR,
+    DEFAULT_DATA_ROOT,
+    DEFAULT_PERSIST_SPLITS_DIR,
+    DEFAULT_SPLIT_OUTPUT_DIR,
+)
+
 
 # ----------------------------
 # Paths & configuration (mirrors hyperbolic script)
 # ----------------------------
-DATA_ROOT = "/data3/datasets/WBC_Our_dataset_extended"
-SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT_extended"
-PERSIST_SPLITS_DIR = "splits"
+DATA_ROOT = DEFAULT_DATA_ROOT
+SPLIT_OUTPUT_DIR = DEFAULT_SPLIT_OUTPUT_DIR
+PERSIST_SPLITS_DIR = DEFAULT_PERSIST_SPLITS_DIR
 
 # Must match how splits were generated
 TRAIN_FRAC = 0.7
@@ -1070,8 +1083,8 @@ if __name__ == "__main__":
     main_data_root = Path(DATA_ROOT).resolve()
 
     # ✅ Writeable locations for models & CSV
-    sweep_out_root = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_extended"
-    results_csv = "/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_extended.csv"
+    sweep_out_root = DEFAULT_CNN_RUNS_DIR
+    results_csv = DEFAULT_CNN_RESULTS_CSV
 
     # Optimized parameter grid for CNN classifier
     param_grid = {

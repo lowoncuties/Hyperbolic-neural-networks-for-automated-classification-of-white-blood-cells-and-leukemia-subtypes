@@ -16,17 +16,18 @@ The migration behavior from those scripts has been folded into the clean library
 
 ## Defaults
 
-The clean scripts now default to the extended dataset setup:
+The clean scripts now resolve paths through `project_paths.py`. Each value can be
+overridden with an environment variable or the existing CLI flag.
 
 | Setting | Hyperbolic / CNN default |
 | --- | --- |
-| `DATA_ROOT` | `/data3/datasets/WBC_Our_dataset_extended` |
-| `SPLIT_OUTPUT_DIR` | `/data2/joc0027/venv/JYOT_extended` |
-| `PERSIST_SPLITS_DIR` | `splits` |
-| Hyperbolic `RUNS_DIR` | `/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_extended` |
-| Hyperbolic `RESULTS_CSV` | `/data2/joc0027/venv/JYOT/sweep_new_wbc_extended.csv` |
-| CNN `RUNS_DIR` | `/data2/joc0027/venv/JYOT/cnn_sweep_runs_extended` |
-| CNN `RESULTS_CSV` | `/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_extended.csv` |
+| `DATA_ROOT` | `$WBC_DATA_ROOT` or `./datasets/WBC_Our_dataset_extended` |
+| `SPLIT_OUTPUT_DIR` | `$WBC_SPLIT_OUTPUT_DIR` or `./outputs` |
+| `PERSIST_SPLITS_DIR` | `$WBC_PERSIST_SPLITS_DIR` or `splits` |
+| Hyperbolic `RUNS_DIR` | `$WBC_HYPERBOLIC_RUNS_DIR` or `./outputs/runs/hyperbolic` |
+| Hyperbolic `RESULTS_CSV` | `$WBC_HYPERBOLIC_RESULTS_CSV` or `./outputs/results/hyperbolic_summary.csv` |
+| CNN `RUNS_DIR` | `$WBC_CNN_RUNS_DIR` or `./outputs/runs/cnn` |
+| CNN `RESULTS_CSV` | `$WBC_CNN_RESULTS_CSV` or `./outputs/results/cnn_summary.csv` |
 
 All of these can still be overridden from the CLI.
 
@@ -37,7 +38,7 @@ All of these can still be overridden from the CLI.
 - The hyperbolic trainer supports two temperature modes:
   - fixed tau baseline
   - optional learnable tau, parameterized as `tau = softplus(raw_tau) + eps`
-- The Euclidean trainer remains the clean modular implementation already present in the library; only its defaults were updated to the extended dataset setup.
+- The Euclidean trainer remains the clean modular implementation already present in the library; only its defaults were updated to repo-local/configurable paths.
 
 ## Dataset And Splits
 

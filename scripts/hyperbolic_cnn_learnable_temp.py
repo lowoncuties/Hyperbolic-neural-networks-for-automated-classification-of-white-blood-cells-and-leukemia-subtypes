@@ -14,6 +14,7 @@ import os
 import json
 import itertools
 import datetime as dt
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple, List, Optional, Dict, Any
@@ -30,13 +31,25 @@ from sklearn.metrics import confusion_matrix, classification_report
 from PIL import ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from project_paths import (
+    DEFAULT_DATA_ROOT,
+    DEFAULT_HYPERBOLIC_RESULTS_CSV,
+    DEFAULT_HYPERBOLIC_RUNS_DIR,
+    DEFAULT_PERSIST_SPLITS_DIR,
+    DEFAULT_SPLIT_OUTPUT_DIR,
+)
+
 
 # ----------------------------
 # Paths & configuration
 # ----------------------------
-DATA_ROOT = "/data3/datasets/WBC_Our_dataset_extended"
-SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT_extended"
-PERSIST_SPLITS_DIR = "splits"
+DATA_ROOT = DEFAULT_DATA_ROOT
+SPLIT_OUTPUT_DIR = DEFAULT_SPLIT_OUTPUT_DIR
+PERSIST_SPLITS_DIR = DEFAULT_PERSIST_SPLITS_DIR
 
 # Must match how splits were generated
 TRAIN_FRAC = 0.7
@@ -51,8 +64,8 @@ BALANCE_TO_MIN: bool = False           # False => balmin0, True => balmin_auto /
 BALANCE_CAP: Optional[int] = None      # only used if BALANCE_TO_MIN=True
 
 # Model/output locations
-RUNS_DIR   = "/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_extended"
-RESULTS_CSV = "/data2/joc0027/venv/JYOT/sweep_new_wbc_extended.csv"
+RUNS_DIR = DEFAULT_HYPERBOLIC_RUNS_DIR
+RESULTS_CSV = DEFAULT_HYPERBOLIC_RESULTS_CSV
 
 # Restrict file types explicitly
 ALLOWED_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}

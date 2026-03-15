@@ -2,7 +2,7 @@
 """
 Hyperbolic Prototype Classifier for White Blood Cell and Leukemia Subtype Classification (dynamic #classes)
 
-- Images: class-subfolder layout at /data3/datasets/WBC_Our_dataset_extended
+- Images: class-subfolder layout under the configured dataset root
 - Splits: pre-generated JSON index files (match the flags used when creating them)
 - Head size: inferred from the splits after thresholding/balancing (no hard-coding)
 - Optional learnable temperature in the hyperbolic head
@@ -45,6 +45,13 @@ from cli_utils import (
 )
 from data.dataloaders import build_dataloaders_from_splits
 from models.hyperbolic_cnn import HyperbolicClassifier
+from project_paths import (
+    DEFAULT_DATA_ROOT,
+    DEFAULT_HYPERBOLIC_RESULTS_CSV,
+    DEFAULT_HYPERBOLIC_RUNS_DIR,
+    DEFAULT_PERSIST_SPLITS_DIR,
+    DEFAULT_SPLIT_OUTPUT_DIR,
+)
 from utils.metrics import (
     compute_sensitivity_specificity_multiclass,
     f1_macro_from_report,
@@ -59,9 +66,9 @@ from utils.reproducibility import set_global_seed
 # ----------------------------
 # Paths & configuration
 # ----------------------------
-DATA_ROOT = "/data3/datasets/WBC_Our_dataset_extended"
-SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT_extended"
-PERSIST_SPLITS_DIR = "splits"
+DATA_ROOT = DEFAULT_DATA_ROOT
+SPLIT_OUTPUT_DIR = DEFAULT_SPLIT_OUTPUT_DIR
+PERSIST_SPLITS_DIR = DEFAULT_PERSIST_SPLITS_DIR
 
 # Must match how splits were generated
 TRAIN_FRAC = 0.7
@@ -76,8 +83,8 @@ BALANCE_TO_MIN: bool = False           # False => balmin0, True => balmin_auto /
 BALANCE_CAP: Optional[int] = None      # only used if BALANCE_TO_MIN=True
 
 # Model/output locations
-RUNS_DIR   = "/data2/joc0027/venv/JYOT/hyperbolic_sweep_runs_wbc_extended"
-RESULTS_CSV = "/data2/joc0027/venv/JYOT/sweep_new_wbc_extended.csv"
+RUNS_DIR = DEFAULT_HYPERBOLIC_RUNS_DIR
+RESULTS_CSV = DEFAULT_HYPERBOLIC_RESULTS_CSV
 
 DEFAULT_PARAM_GRID = {
     "feature_dim": [256],

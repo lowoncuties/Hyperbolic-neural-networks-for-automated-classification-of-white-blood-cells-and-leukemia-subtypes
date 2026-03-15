@@ -41,6 +41,13 @@ from cli_utils import (
 )
 from data.dataloaders import build_dataloaders_from_splits
 from models.classic_cnn import CNNClassifier
+from project_paths import (
+    DEFAULT_CNN_RESULTS_CSV,
+    DEFAULT_CNN_RUNS_DIR,
+    DEFAULT_DATA_ROOT,
+    DEFAULT_PERSIST_SPLITS_DIR,
+    DEFAULT_SPLIT_OUTPUT_DIR,
+)
 from utils.metrics import (
     compute_sensitivity_specificity_multiclass,
     f1_macro_from_preds_labels,
@@ -55,11 +62,11 @@ from utils.reproducibility import set_global_seed
 # ----------------------------
 # Paths & configuration (mirrors hyperbolic script)
 # ----------------------------
-DATA_ROOT = "/data3/datasets/WBC_Our_dataset_extended"
-SPLIT_OUTPUT_DIR = "/data2/joc0027/venv/JYOT_extended"
-PERSIST_SPLITS_DIR = "splits"
-RUNS_DIR = "/data2/joc0027/venv/JYOT/cnn_sweep_runs_extended"
-RESULTS_CSV = "/data2/joc0027/venv/JYOT/cnn_sweep_results_wbc_extended.csv"
+DATA_ROOT = DEFAULT_DATA_ROOT
+SPLIT_OUTPUT_DIR = DEFAULT_SPLIT_OUTPUT_DIR
+PERSIST_SPLITS_DIR = DEFAULT_PERSIST_SPLITS_DIR
+RUNS_DIR = DEFAULT_CNN_RUNS_DIR
+RESULTS_CSV = DEFAULT_CNN_RESULTS_CSV
 
 TRAIN_FRAC = 0.7
 VAL_FRAC = 0.15
