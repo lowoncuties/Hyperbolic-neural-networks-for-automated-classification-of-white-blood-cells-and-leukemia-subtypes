@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wbc-hyperbolic-classification"
+version = "0.1.0"
+description = "Euclidean and hyperbolic neural classifiers for white blood cell and leukemia subtype recognition."
+readme = "README.md"
+requires-python = ">=3.13.3"
+license = { file = "LICENSE" }
+dependencies = [
+  "numpy>=1.26,<3",
+  "pillow>=10,<12",
+  "matplotlib>=3.8,<4",
+  "scikit-learn>=1.4,<2",
+  "tqdm>=4.66,<5",
+  "torch>=2.2,<3",
+  "torchvision>=0.17,<1",
+  "geoopt>=0.5,<1"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

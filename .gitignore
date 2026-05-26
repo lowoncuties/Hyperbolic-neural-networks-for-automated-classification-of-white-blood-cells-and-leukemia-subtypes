@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Environments
+.env
+.env.*
+.venv/
+venv/
+
+# Local notebooks and editor state
+.ipynb_checkpoints/
+.vscode/
+.idea/
+
+# System files
+.DS_Store
+
+# Large local data and generated outputs
+datasets/
+outputs/
+runs/
+wandb/
+*.log
+
+# Keep packaged best checkpoints under models/, but ignore accidental training dumps.
+*.ckpt
+*.pth
+last.pt
+best_epoch*.pt

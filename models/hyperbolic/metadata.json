@@ -1,0 +1,63 @@
+{
+  "model_type": "hyperbolic",
+  "display_name": "Best grouped hyperbolic prototype classifier",
+  "checkpoint_file": "best.pt",
+  "report_file": "test_classification_report.csv",
+  "sha256": "a20491d2b58525fd6f10af44692bc3d6a84283f6a48b853c69a3819b00b8b92b",
+  "selection": {
+    "metric": "test_f1_macro",
+    "rank": 1,
+    "source_summary_name": "hyperbolic_tuned20_grouped_results.csv",
+    "source_run_name": "batch_size=256_feature_clip_norm=2.0_feature_dim=256_img_size=224_init_curvature=2.0_lr_backbone=0.0001_lr_curvature=0.003_lr_head=0.005_lr_temperature=0.003_seed=42_temperature=1.0"
+  },
+  "split": {
+    "protocol": "acquisition_aware_v1",
+    "seed": 42,
+    "train_frac": 0.7,
+    "val_frac": 0.15,
+    "test_frac": 0.15,
+    "img_size": 224,
+    "threshold": 110,
+    "balance_to_min": false,
+    "persist_splits_dir": "splits_grouped_acq_v1"
+  },
+  "metrics": {
+    "best_epoch": 22,
+    "test_acc": 0.8272,
+    "test_f1_macro": 0.8244446620810439,
+    "learned_c": 0.04356047511100769,
+    "learned_tau": 0.3162989318370819
+  },
+  "config": {
+    "feature_dim": 256,
+    "init_curvature": 2.0,
+    "temperature": 1.0,
+    "learnable_temperature": true,
+    "batch_size": 256,
+    "epochs": 25,
+    "lr_backbone": 0.0001,
+    "lr_head": 0.005,
+    "lr_curvature": 0.003,
+    "lr_temperature": 0.003,
+    "feature_clip_norm": 2.0,
+    "img_size": 224,
+    "seed": 42
+  },
+  "classes": [
+    "Basophil",
+    "Blast",
+    "Eosinophil",
+    "Erythroblast",
+    "Immature_wbc",
+    "Lymphocyte",
+    "Lymphocyte_atypical",
+    "Metamyelocyte",
+    "Monocyte",
+    "Myeloblast",
+    "Myelocyte",
+    "Neutrophil",
+    "Neutrophil_band",
+    "Promyelocyte"
+  ],
+  "num_classes": 14
+}

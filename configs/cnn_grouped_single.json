@@ -1,0 +1,21 @@
+{
+  "feature_dim": 256,
+  "batch_size": 512,
+  "epochs": 25,
+  "learning_rate": 0.0005,
+  "img_size": 224,
+  "workers": 8,
+  "seed": 42,
+  "patience": 7,
+  "overfit_patience": 3,
+  "dropout_rate": 0.2,
+  "weight_decay": 0.0001,
+  "threshold": 110,
+  "balance_to_min": false,
+  "balance_cap": null,
+  "split_seed": 42,
+  "train_frac": 0.7,
+  "val_frac": 0.15,
+  "split_output_dir": "outputs",
+  "persist_splits_dir": "splits_grouped_acq_v1"
+}

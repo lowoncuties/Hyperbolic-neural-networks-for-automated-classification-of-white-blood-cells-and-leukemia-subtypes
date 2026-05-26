@@ -1,0 +1,14 @@
+{
+  "feature_dim": [256],
+  "init_curvature": [2.0],
+  "temperature": [1.0],
+  "learnable_temperature": [true],
+  "batch_size": [256],
+  "lr_backbone": [0.00005, 0.0001],
+  "lr_head": [0.003, 0.004, 0.005],
+  "lr_curvature": [0.003, 0.004],
+  "lr_temperature": [0.003],
+  "feature_clip_norm": [2.0],
+  "img_size": [224],
+  "seed": [42]
+}

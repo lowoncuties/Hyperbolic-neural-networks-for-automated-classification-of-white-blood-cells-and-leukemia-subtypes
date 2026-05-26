@@ -1,0 +1,56 @@
+{
+  "model_type": "euclid",
+  "display_name": "Best grouped Euclidean CNN baseline",
+  "checkpoint_file": "best.pt",
+  "report_file": "test_classification_report.csv",
+  "sha256": "cb46451ceca531b574c348812d64a76946f51f630ba2d98fff7bc658a409012b",
+  "selection": {
+    "metric": "test_f1_macro",
+    "rank": 1,
+    "source_summary_name": "cnn_sweep_results_wbc_extended_grouped_20.csv",
+    "source_run_name": "feature_dim=256_batch_size=512_learning_rate=0.0005_img_size=224_seed=42_dropout_rate=0.2_weight_decay=0.0001"
+  },
+  "split": {
+    "protocol": "acquisition_aware_v1",
+    "seed": 42,
+    "train_frac": 0.7,
+    "val_frac": 0.15,
+    "test_frac": 0.15,
+    "img_size": 224,
+    "threshold": 110,
+    "balance_to_min": false,
+    "persist_splits_dir": "splits_grouped_acq_v1"
+  },
+  "metrics": {
+    "best_epoch": 15,
+    "test_acc": 0.828954815864563,
+    "test_f1_macro": 0.8190184078429702
+  },
+  "config": {
+    "feature_dim": 256,
+    "batch_size": 512,
+    "epochs": 25,
+    "learning_rate": 0.0005,
+    "dropout_rate": 0.2,
+    "weight_decay": 0.0001,
+    "img_size": 224,
+    "seed": 42
+  },
+  "classes": [
+    "Basophil",
+    "Blast",
+    "Eosinophil",
+    "Erythroblast",
+    "Immature_wbc",
+    "Lymphocyte",
+    "Lymphocyte_atypical",
+    "Metamyelocyte",
+    "Monocyte",
+    "Myeloblast",
+    "Myelocyte",
+    "Neutrophil",
+    "Neutrophil_band",
+    "Promyelocyte"
+  ],
+  "num_classes": 14
+}
