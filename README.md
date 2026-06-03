@@ -1,4 +1,4 @@
-# Hyperbolic Neural Networks for Automated Classification of White Blood Cells and Leukemia Subtypes
+# Hyperbolic neural networks for biologically informed classification of white blood cells and hematopoietic cell states in peripheral blood smears
 
 This archive contains source code, configuration files, and reproducibility utilities associated with the manuscript:
 
