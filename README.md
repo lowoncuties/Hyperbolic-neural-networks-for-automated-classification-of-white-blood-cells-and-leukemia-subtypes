@@ -323,7 +323,7 @@ The verifier checks required archive files, JSON validity, packaged checkpoint c
 
 ## 10. Funding
 
-This work was supported by the Center for Artificial Intelligence and Quantum Computing in System Brain Research (CLARA) (101136607-02), the project "Research Platform for Digital Transformation and Society 5.0" (CZ.02.01.01/00/23_021/0012599), and the Internal Grant Agency of VSB-TUO, Processing and Advanced Analysis of Biomedical Data XI of the Czech Republic (SP2026/008).
+This work was supported by the Center for Artificial Intelligence and Quantum Computing in System Brain Research (CLARA) (101136607-02), the project “Research Platform for Digital Transformation and Society 5.0” (CZ.02.01.01/00/23\_021/0012599), the Internal Grant Agency of VSB-TUO, Processing and Advanced Analysis of Biomedical Data XI of the Czech Republic (SP2026/008).
 
 ---
 
